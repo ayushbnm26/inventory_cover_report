@@ -28,6 +28,7 @@ from inventory_cover.inventory_cover_schemas import (
     SOURCE_ROW_TRACE_HEADERS,
     SOURCE_SUMMARY_HEADERS,
     TEAM_REPORT_HEADERS,
+    TEXT_COLUMNS,
     VALIDATION_ISSUE_HEADERS,
     InventoryCoverValidationIssue,
     ProductCoverRow,
@@ -70,20 +71,42 @@ def write_team_workbook(
         wb = Workbook()
         report_ws = wb.active
         report_ws.title = "Inventory_Cover_Report"
-        _write_report_sheet(report_ws, products, "InventoryCoverReportTable", config, with_formulas=True)
+        _write_report_sheet(
+            report_ws,
+            products,
+            "InventoryCoverReportTable",
+            config,
+            with_formulas=True,
+            use_table=False,
+            formula_style="a1",
+        )
 
         formula_ws = wb.create_sheet("Formula_Audit")
-        _write_report_sheet(formula_ws, products, "InventoryCoverFormulaAuditTable", config, with_formulas=True)
+        _write_report_sheet(
+            formula_ws,
+            products,
+            "InventoryCoverFormulaAuditTable",
+            config,
+            with_formulas=True,
+            use_table=False,
+            formula_style="a1",
+        )
         formula_ws.sheet_state = "hidden"
 
         for bucket in COVER_BUCKETS:
             sheet_name = BUCKET_SHEET_NAMES[bucket]
             ws = wb.create_sheet(sheet_name)
             bucket_products = [p for p in products if p.cover_bucket == bucket]
-            _write_annexure_sheet(ws, bucket_products, f"{_safe_table(sheet_name)}Table")
+            _write_annexure_sheet(ws, bucket_products, f"{_safe_table(sheet_name)}Table", use_table=False)
 
         guide_ws = wb.create_sheet("Formula_Guide")
-        _write_plain_sheet(guide_ws, FORMULA_GUIDE_HEADERS, guide_rows, "InventoryCoverFormulaGuideTable")
+        _write_plain_sheet(
+            guide_ws,
+            FORMULA_GUIDE_HEADERS,
+            guide_rows,
+            "InventoryCoverFormulaGuideTable",
+            use_table=False,
+        )
         _format_guide_sheet(guide_ws)
 
         summary_ws = wb.create_sheet("Source_Summary")
@@ -92,6 +115,7 @@ def write_team_workbook(
             SOURCE_SUMMARY_HEADERS,
             [record.as_row() for record in summaries],
             "InventoryCoverSourceSummaryTable",
+            use_table=False,
         )
         _format_long_text_columns(summary_ws, ("Warnings", "Source Latest Path", "Copied Run Path"))
 
@@ -190,27 +214,40 @@ def _write_report_sheet(
     table_name: str,
     config: Any,
     with_formulas: bool,
+    use_table: bool = True,
+    formula_style: str = "structured",
 ) -> None:
     headers = list(TEAM_REPORT_HEADERS)
     _assert_unique_headers(headers, ws.title)
     ws.append(headers)
     window = int(config.sales_window_days)
     default_target = float(config.default_target_doh)
-    for product in products:
+    positions = {header: index for index, header in enumerate(headers, start=1)}
+    for row_index, product in enumerate(products, start=2):
         row_cells: list[Any] = []
         for header in headers:
-            formula = F.formula_for(header, window, default_target) if with_formulas else None
+            if with_formulas and formula_style == "a1":
+                formula = _a1_formula_for(header, row_index, positions, window, default_target)
+            elif with_formulas:
+                formula = F.formula_for(header, window, default_target)
+            else:
+                formula = None
             if formula is not None:
                 row_cells.append(formula)
             else:
                 row_cells.append(product.team_value(header))
         ws.append(row_cells)
-    _style_table(ws, table_name)
+    _style_table(ws, table_name, use_table=use_table)
     _format_report_columns(ws)
     _apply_bucket_conditional(ws, products)
 
 
-def _write_annexure_sheet(ws: Any, products: list[ProductCoverRow], table_name: str) -> None:
+def _write_annexure_sheet(
+    ws: Any,
+    products: list[ProductCoverRow],
+    table_name: str,
+    use_table: bool = True,
+) -> None:
     headers = list(TEAM_REPORT_HEADERS)
     ws.append(headers)
     if not products:
@@ -219,7 +256,7 @@ def _write_annexure_sheet(ws: Any, products: list[ProductCoverRow], table_name: 
     else:
         for product in products:
             ws.append([product.team_value(header) for header in headers])
-    _style_table(ws, table_name)
+    _style_table(ws, table_name, use_table=use_table)
     _format_report_columns(ws)
 
 
@@ -234,16 +271,105 @@ def _write_master_backend_sheet(ws: Any, products: list[ProductCoverRow], run_id
     _format_report_columns(ws)
 
 
-def _write_plain_sheet(ws: Any, headers: Iterable[str], rows: Iterable[Iterable[Any]], table_name: str) -> None:
+def _write_plain_sheet(
+    ws: Any,
+    headers: Iterable[str],
+    rows: Iterable[Iterable[Any]],
+    table_name: str,
+    use_table: bool = True,
+) -> None:
     headers = list(headers)
     _assert_unique_headers(headers, ws.title)
     ws.append(headers)
     for row in rows:
         ws.append(list(row))
-    _style_table(ws, table_name)
+    _style_table(ws, table_name, use_table=use_table)
 
 
-def _style_table(ws: Any, table_name: str) -> None:
+def _a1_formula_for(
+    header: str,
+    row_index: int,
+    positions: dict[str, int],
+    window_days: int,
+    default_target: float,
+) -> str | None:
+    """Return row-specific A1 formulas for the visible team workbook."""
+
+    def ref(column: str) -> str:
+        return f"{get_column_letter(positions[column])}{row_index}"
+
+    def nref(column: str) -> str:
+        return f"N({ref(column)})"
+
+    def total(columns: tuple[str, ...]) -> str:
+        return "+".join(nref(column) for column in columns)
+
+    formulas = {
+        "Sales Days": (
+            f'=IFERROR(IF(AND({ref("Sales Period Start")}<>"",{ref("Sales Period End")}<>""),'
+            f'MIN({window_days},{ref("Sales Period End")}-{ref("Sales Period Start")}+1),'
+            f'IF({nref("Sales Units")}>0,{window_days},0)),0)'
+        ),
+        "Daily Run Rate": (
+            f'=IFERROR(IF({ref("Sales Days")}>0,{nref("Sales Units")}/{ref("Sales Days")},0),0)'
+        ),
+        "Target DOH": (
+            f'=IF({nref("Aligned DOH Target")}>0,{ref("Aligned DOH Target")},{_num(default_target)})'
+        ),
+        "Current Stock DOH": _a1_doh(ref("Daily Run Rate"), total(("Sellable On Hand Units",))),
+        "Stock + Amazon Transit DOH": _a1_doh(
+            ref("Daily Run Rate"),
+            total(("Sellable On Hand Units", "Amazon In-Transit Units")),
+        ),
+        "Stock + Own Transit DOH": _a1_doh(
+            ref("Daily Run Rate"),
+            total(("Sellable On Hand Units", "Own In-Transit Units")),
+        ),
+        "Total Transit DOH": _a1_doh(
+            ref("Daily Run Rate"),
+            total(("Sellable On Hand Units", "Amazon In-Transit Units", "Own In-Transit Units")),
+        ),
+        "DOC Including Open PO": _a1_doh(
+            ref("Daily Run Rate"),
+            total(("Sellable On Hand Units", "Open PO Quantity", "Own In-Transit Units")),
+        ),
+        "Total Supply Cover DOH": _a1_doh(
+            ref("Daily Run Rate"),
+            total(("Sellable On Hand Units", "Open PO Quantity", "Amazon In-Transit Units", "Own In-Transit Units")),
+        ),
+        "Gap to Target Units": (
+            f'=IFERROR(MAX({ref("Target DOH")}*{ref("Daily Run Rate")}-'
+            f'({total(("Sellable On Hand Units", "Amazon In-Transit Units", "Own In-Transit Units", "Open PO Quantity"))}),0),0)'
+        ),
+        "Cover Bucket": (
+            f'=IF({ref("Total Supply Cover DOH")}="No Sales","No Sales",'
+            f'IF({ref("Total Supply Cover DOH")}<5,"Critical",'
+            f'IF({ref("Total Supply Cover DOH")}<15,"High Risk",'
+            f'IF({ref("Total Supply Cover DOH")}<25,"Watch",'
+            f'IF({ref("Total Supply Cover DOH")}<=30,"Near Target","Healthy")))))'
+        ),
+        "Cover Alert": (
+            f'=IF({ref("Cover Bucket")}="No Sales","No sales in selected period",'
+            f'IF({ref("Cover Bucket")}="Critical","Immediate action",'
+            f'IF({ref("Cover Bucket")}="High Risk","Urgent replenishment",'
+            f'IF({ref("Cover Bucket")}="Watch","Plan replenishment",'
+            f'IF({ref("Cover Bucket")}="Near Target","Monitor","No immediate action")))))'
+        ),
+    }
+    return formulas.get(header)
+
+
+def _a1_doh(drr_ref: str, numerator: str) -> str:
+    return f'=IFERROR(IF({drr_ref}>0,({numerator})/{drr_ref},"No Sales"),"No Sales")'
+
+
+def _num(value: float) -> str:
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _style_table(ws: Any, table_name: str, use_table: bool = True) -> None:
     for cell in ws[1]:
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
@@ -258,16 +384,17 @@ def _style_table(ws: Any, table_name: str) -> None:
     last_row = max(ws.max_row, 1)
     last_col = max(ws.max_column, 1)
     table_ref = f"A1:{get_column_letter(last_col)}{last_row}"
-    table = Table(displayName=table_name, ref=table_ref)
-    table.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws.add_table(table)
     ws.auto_filter.ref = table_ref
+    if use_table:
+        table = Table(displayName=table_name, ref=table_ref)
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        ws.add_table(table)
     _autosize_columns(ws)
 
 
@@ -279,7 +406,35 @@ def _format_report_columns(ws: Any) -> None:
         _format_column(ws, positions, header, "#,##0")
     for header in DECIMAL_COLUMNS:
         _format_column(ws, positions, header, "0.00")
+    _align_report_columns(ws, positions)
     _format_long_text_columns(ws, ("Cover Alert", "Data Quality Flag"))
+
+
+def _align_report_columns(ws: Any, positions: dict[Any, int]) -> None:
+    left_headers = {
+        "Model Number / SKU",
+        "ASIN",
+        "Brand",
+        "Brand Name",
+        "Vendor",
+        "Main Category",
+        "Sub Category",
+        "Remarks",
+    }
+    center_headers = set(DATE_COLUMNS) | {"Cover Bucket", "Cover Alert"}
+    right_headers = set(INTEGER_COLUMNS) | set(DECIMAL_COLUMNS)
+    for header, col in positions.items():
+        if header in right_headers:
+            horizontal = "right"
+        elif header in center_headers:
+            horizontal = "center"
+        elif header in TEXT_COLUMNS or header in left_headers:
+            horizontal = "left"
+        else:
+            horizontal = "left"
+        wrap = header in {"Cover Alert", "Remarks"}
+        for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+            row[0].alignment = Alignment(horizontal=horizontal, vertical="top", wrap_text=wrap)
 
 
 def _apply_bucket_conditional(ws: Any, products: list[ProductCoverRow]) -> None:
@@ -310,7 +465,12 @@ def _format_long_text_columns(ws: Any, headers: tuple[str, ...]) -> None:
             continue
         ws.column_dimensions[get_column_letter(col)].width = 42
         for cell in ws.iter_rows(min_row=2, min_col=col, max_col=col):
-            cell[0].alignment = Alignment(wrap_text=True, vertical="top")
+            current = cell[0].alignment
+            cell[0].alignment = Alignment(
+                horizontal=current.horizontal,
+                vertical=current.vertical or "top",
+                wrap_text=True,
+            )
 
 
 def _format_guide_sheet(ws: Any) -> None:

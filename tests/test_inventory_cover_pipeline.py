@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -334,13 +335,25 @@ def test_team_cells_have_formulas_with_cached_values(tmp_path: Path) -> None:
     assert rows[0]["Current Stock DOH"] == pytest.approx(100.0)
 
     drr = _formula_cell(result.team_output_file, "Inventory_Cover_Report", "Daily Run Rate")
-    assert isinstance(drr, str) and drr.startswith("=") and "Sales Days" in drr
+    assert isinstance(drr, str) and drr.startswith("=") and "K2" in drr
+    assert "[@" not in drr
     for header in ("Current Stock DOH", "Total Supply Cover DOH", "Cover Bucket", "Gap to Target Units"):
         formula = _formula_cell(result.team_output_file, "Inventory_Cover_Report", header)
         assert isinstance(formula, str) and formula.startswith("=")
 
     audit_drr = _formula_cell(result.team_output_file, "Formula_Audit", "Daily Run Rate")
     assert isinstance(audit_drr, str) and audit_drr.startswith("=")
+
+
+def test_team_workbook_has_no_excel_table_parts(tmp_path: Path) -> None:
+    config = make_sources(
+        tmp_path,
+        sales_rows=[_full_window_sales("A1", 30)],
+        inventory_rows=[_inventory_row("A1", 100, amz=10)],
+    )
+    result = InventoryCoverPipeline(config).run()
+    with ZipFile(result.team_output_file) as workbook:
+        assert not any(name.startswith("xl/tables/") for name in workbook.namelist())
 
 
 def test_no_sales_product_in_annexure(tmp_path: Path) -> None:
