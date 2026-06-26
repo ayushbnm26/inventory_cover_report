@@ -23,8 +23,8 @@ The final report calculates and explains inventory health using metrics such as:
 - Total supply cover DOH.
 - Gap to target units.
 - Cover bucket and cover alert flags.
-- Data quality flag and business remarks.
+- Backend data quality flags and team remarks.
 
-Pipeline 4 implements these calculations. The team workbook engraves the formulas directly into Excel cells (divide-by-zero safe, with explicit `No Sales` handling) and ships annexure sheets per cover bucket, a Formula_Guide, and a Source_Summary. A backend audit workbook adds full source-row traceability, a calculation audit, validation issues, and run metadata.
+Pipeline 4 implements these calculations. The team workbook engraves the formulas directly into Excel cells (divide-by-zero safe, with explicit `No Sales` handling) and ships annexure sheets per cover bucket, a Formula_Guide, and a Source_Summary without backend-only diagnostic clutter. A backend audit workbook adds data quality flags, full source-row traceability, a calculation audit, validation issues, and run metadata.
 
 Future enhancements may add demand forecasting, recommended PO quantity, and lead-time modelling on top of this engine.

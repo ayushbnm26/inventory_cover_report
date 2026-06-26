@@ -9,7 +9,7 @@ The implemented pipelines are:
 3. Pipeline 3: Amazon Vendor Central Sales & Inventory backend pipeline.
 4. Pipeline 4: Final Inventory Cover Calculation Engine.
 
-Pipeline 4 is the core calculation layer. It consumes the latest backend outputs of the three independent source pipelines and produces the final inventory cover report with Daily Run Rate (DRR), Days On Hand (DOH), transit cover, Days Of Cover (DOC), total supply cover, target gap, and cover flags. It is loosely coupled: it reads the source backend artifacts through a stable sheet/column interface contract and never mutates them.
+Pipeline 4 is the core calculation layer. It consumes the latest backend outputs of the three independent source pipelines and produces the final inventory cover report with Daily Run Rate (DRR), Days On Hand (DOH), transit cover, Days Of Cover (DOC), total supply cover, target gap, cover bucket, and cover alert. It is loosely coupled: it reads the source backend artifacts through a stable sheet/column interface contract and never mutates them.
 
 ## Pipeline Overview
 
@@ -96,7 +96,7 @@ data/processed/sales_inventory/latest/Sales_Backend_Audit_latest.xlsx     (sheet
 data/processed/sales_inventory/latest/Inventory_Backend_Audit_latest.xlsx (sheet: Inventory_Master)
 ```
 
-Optional reference (defaults Target DOH to 30 and warns if absent):
+Optional reference. If absent, the team workbook displays the configured default target (30 by default) instead of leaving the target column blank, and the backend audit records the missing-reference warning:
 
 ```text
 data/reference/master_data/ASIN_Master.xlsx                               (sheet: ASIN_Master)
@@ -111,7 +111,7 @@ data/processed/inventory_cover/latest/Inventory_Cover_Report_latest.xlsx
 data/processed/inventory_cover/latest/Inventory_Cover_Backend_Audit_latest.xlsx
 ```
 
-Team workbook sheets:
+Team workbook sheets. The team-facing report intentionally omits backend-only diagnostic columns such as `Data Quality Flag`; those remain in the audit workbook:
 
 ```text
 Inventory_Cover_Report
@@ -149,7 +149,7 @@ Total Transit DOH       = (On Hand + Amazon In-Transit + Own In-Transit) / DRR
 DOC Including Open PO    = (On Hand + Open PO + Own In-Transit) / DRR
 Total Supply Cover DOH  = (On Hand + Open PO + Amazon In-Transit + Own In-Transit) / DRR
 Gap to Target Units     = MAX(Target DOH * DRR - (On Hand + Amazon + Own + Open PO), 0)
-Target DOH              = Aligned DOH Target if available else 30
+Target DOH              = Aligned DOH Target if available else configured default target (30)
 ```
 
 When DRR is zero, the DOH/DOC columns show `No Sales` instead of dividing by zero.
@@ -166,6 +166,8 @@ No DRR        No Sales      No sales in selected period
 ```
 
 Blank numeric policy: blank `Sales Units`, `Sellable On Hand Units`, `Amazon In-Transit Units`, `Own In-Transit Units`, and `Open PO Quantity` are treated as zero for calculation only. Raw source values are preserved in the source backend workbooks and traced in the backend audit workbook.
+
+Products with no sales row still show the latest selected sales period when a sales source exists, so the team can see the period being evaluated. They remain classified as `No Sales` because DRR is zero.
 
 Run the engine on the latest source outputs:
 

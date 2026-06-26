@@ -63,8 +63,13 @@ TEAM_REPORT_HEADERS: tuple[str, ...] = (
     "Gap to Target Units",
     "Cover Bucket",
     "Cover Alert",
-    "Data Quality Flag",
     "Remarks",
+)
+
+# Backend master keeps diagnostic flags that are intentionally omitted from the
+# team workbook.
+BACKEND_MASTER_REPORT_HEADERS: tuple[str, ...] = (
+    TEAM_REPORT_HEADERS[:-1] + ("Data Quality Flag", "Remarks")
 )
 
 # Columns whose values are written into Excel cells as live formulas.
@@ -187,7 +192,7 @@ MASTER_BACKEND_EXTRA_HEADERS: tuple[str, ...] = (
     "Calculation Warning Notes",
 )
 
-MASTER_BACKEND_HEADERS: tuple[str, ...] = TEAM_REPORT_HEADERS + MASTER_BACKEND_EXTRA_HEADERS
+MASTER_BACKEND_HEADERS: tuple[str, ...] = BACKEND_MASTER_REPORT_HEADERS + MASTER_BACKEND_EXTRA_HEADERS
 
 SOURCE_ROW_TRACE_HEADERS: tuple[str, ...] = (
     "Run ID",
@@ -494,7 +499,7 @@ class ProductCoverRow:
             "Vendor": self.vendor,
             "Main Category": self.main_category,
             "Sub Category": self.sub_category,
-            "Aligned DOH Target": self.aligned_doh_target,
+            "Aligned DOH Target": self.aligned_doh_target if self.aligned_doh_target is not None else self.target_doh,
             "Sales Period Start": self.sales_period_start,
             "Sales Period End": self.sales_period_end,
             "Sales Days": self.sales_days,

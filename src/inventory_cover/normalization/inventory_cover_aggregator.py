@@ -175,6 +175,7 @@ def aggregate_products(
     _aggregate_sales(run_id, sales, get_product, traces, issues, stats[SOURCE_SALES], config)
     _aggregate_b2b(run_id, b2b, get_product, traces, issues, stats[SOURCE_B2B])
     _aggregate_po(run_id, po, get_product, traces, issues, stats[SOURCE_PO])
+    _apply_global_sales_window(products.values(), stats[SOURCE_SALES])
 
     # Enrich identity and descriptive fields, applying ASIN master priority.
     for product in products.values():
@@ -488,6 +489,18 @@ def _aggregate_po(
             source_business_key=asin or model, quantity_used=qty, value_used=None, date_used=end,
             trace_notes=f"Open PO from '{open_po_col}'." if open_po_col else "No open PO column.",
         ))
+
+
+def _apply_global_sales_window(products, sales_stats: SourceStats) -> None:
+    """Show the evaluated sales window even for products with no sales row."""
+
+    if sales_stats.period_start is None or sales_stats.period_end is None:
+        return
+    for product in products:
+        if product.sales_period_start is None:
+            product.sales_period_start = sales_stats.period_start
+        if product.sales_period_end is None:
+            product.sales_period_end = sales_stats.period_end
 
 
 def _finalize_identity(

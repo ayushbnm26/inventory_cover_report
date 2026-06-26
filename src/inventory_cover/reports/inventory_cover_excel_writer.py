@@ -20,6 +20,7 @@ from inventory_cover.inventory_cover_schemas import (
     DECIMAL_COLUMNS,
     FORMULA_GUIDE_HEADERS,
     INTEGER_COLUMNS,
+    BACKEND_MASTER_REPORT_HEADERS,
     MASTER_BACKEND_HEADERS,
     RUN_METADATA_HEADERS,
     SOURCE_ROW_TRACE_HEADERS,
@@ -215,7 +216,7 @@ def _write_master_backend_sheet(ws: Any, products: list[ProductCoverRow], run_id
     _assert_unique_headers(headers, ws.title)
     ws.append(headers)
     for product in products:
-        base = [product.team_value(header) for header in TEAM_REPORT_HEADERS]
+        base = [product.team_value(header) for header in BACKEND_MASTER_REPORT_HEADERS]
         ws.append(base + product.backend_extra_values(run_id))
     _style_table(ws, "InventoryCoverMasterTable")
     _format_report_columns(ws)
@@ -455,11 +456,11 @@ def build_formula_guide_rows(
          "When DRR is zero, DOH columns show 'No Sales' and bucket is 'No Sales'.",
          "Prevents divide-by-zero and misleading infinite cover.",
          "Surfaces products with stock but no recent sales."],
-        ["Handling", "Data Quality Flag",
-         "Computed in Python (joined with '; ').",
-         "Values: OK, No Sales, Missing ASIN, Missing Inventory, Missing Sales, Missing Target DOH, "
-         "Identifier Conflict, Calculation Warning.",
-         "Quick read on row trustworthiness."],
+        ["Handling", "Backend audit flags",
+         "Computed in Python and stored in Inventory_Cover_Backend_Audit, not in the team report.",
+         "Values can include OK, No Sales, Missing ASIN, Missing Inventory, Missing Sales, Missing Target DOH, "
+         "Identifier Conflict, and Calculation Warning.",
+         "Keeps diagnostic noise out of the team workbook while preserving audit traceability."],
         ["Handling", "Remarks column purpose",
          "Left blank intentionally.",
          "Free space for the team to add notes.",

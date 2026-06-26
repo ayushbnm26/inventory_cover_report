@@ -238,8 +238,23 @@ def test_engine_runs_when_asin_master_missing(tmp_path: Path) -> None:
     )
     result = InventoryCoverPipeline(config).run()
     assert result.product_count == 1
+    team = _read_table(result.team_output_file, "Inventory_Cover_Report")
     master = _read_table(result.backend_output_file, "Inventory_Cover_Master")
+    assert team[0]["Aligned DOH Target"] == 30
     assert master[0]["Target DOH"] == 30  # default target
+
+
+def test_team_workbook_omits_data_quality_flag_but_backend_keeps_it(tmp_path: Path) -> None:
+    config = make_sources(
+        tmp_path,
+        sales_rows=[_full_window_sales("A1", 30)],
+        inventory_rows=[_inventory_row("A1", 100)],
+    )
+    result = InventoryCoverPipeline(config).run()
+    team = _read_table(result.team_output_file, "Inventory_Cover_Report")
+    backend = _read_table(result.backend_output_file, "Inventory_Cover_Master")
+    assert "Data Quality Flag" not in team[0]
+    assert "Data Quality Flag" in backend[0]
 
 
 def test_all_sources_missing_raises(tmp_path: Path) -> None:
