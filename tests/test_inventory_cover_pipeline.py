@@ -322,17 +322,21 @@ def test_raw_source_not_overwritten(tmp_path: Path) -> None:
     assert before == after
 
 
-def test_formulas_written_into_team_cells(tmp_path: Path) -> None:
+def test_team_cells_have_values_and_formula_audit_keeps_formulas(tmp_path: Path) -> None:
     config = make_sources(
         tmp_path,
         sales_rows=[_full_window_sales("A1", 30)],
         inventory_rows=[_inventory_row("A1", 100, amz=10)],
     )
     result = InventoryCoverPipeline(config).run()
-    drr = _formula_cell(result.team_output_file, "Inventory_Cover_Report", "Daily Run Rate")
+    rows = _read_table(result.team_output_file, "Inventory_Cover_Report")
+    assert rows[0]["Daily Run Rate"] == pytest.approx(1.0)
+    assert rows[0]["Current Stock DOH"] == pytest.approx(100.0)
+
+    drr = _formula_cell(result.team_output_file, "Formula_Audit", "Daily Run Rate")
     assert isinstance(drr, str) and drr.startswith("=") and "Sales Days" in drr
     for header in ("Current Stock DOH", "Total Supply Cover DOH", "Cover Bucket", "Gap to Target Units"):
-        formula = _formula_cell(result.team_output_file, "Inventory_Cover_Report", header)
+        formula = _formula_cell(result.team_output_file, "Formula_Audit", header)
         assert isinstance(formula, str) and formula.startswith("=")
 
 
@@ -365,7 +369,7 @@ def test_team_and_backend_sheets_present(tmp_path: Path) -> None:
     team = load_workbook(result.team_output_file).sheetnames
     backend = load_workbook(result.backend_output_file).sheetnames
     for sheet in ("Inventory_Cover_Report", "Critical", "High_Risk", "Watch", "Near_Target",
-                  "Healthy", "No_Sales", "Formula_Guide", "Source_Summary"):
+                  "Healthy", "No_Sales", "Formula_Guide", "Source_Summary", "Formula_Audit"):
         assert sheet in team
     for sheet in ("Inventory_Cover_Master", "Source_Row_Trace", "Source_Summary",
                   "Validation_Issues", "Calculation_Audit", "Formula_Guide", "Run_Metadata"):

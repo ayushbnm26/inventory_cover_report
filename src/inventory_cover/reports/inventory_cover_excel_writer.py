@@ -68,7 +68,11 @@ def write_team_workbook(
         wb = Workbook()
         report_ws = wb.active
         report_ws.title = "Inventory_Cover_Report"
-        _write_report_sheet(report_ws, products, "InventoryCoverReportTable", config, with_formulas=True)
+        _write_report_sheet(report_ws, products, "InventoryCoverReportTable", config, with_formulas=False)
+
+        formula_ws = wb.create_sheet("Formula_Audit")
+        _write_report_sheet(formula_ws, products, "InventoryCoverFormulaAuditTable", config, with_formulas=True)
+        formula_ws.sheet_state = "hidden"
 
         for bucket in COVER_BUCKETS:
             sheet_name = BUCKET_SHEET_NAMES[bucket]
@@ -89,6 +93,7 @@ def write_team_workbook(
         )
         _format_long_text_columns(summary_ws, ("Warnings", "Source Latest Path", "Copied Run Path"))
 
+        _enable_recalculation(wb)
         wb.save(temp_path)
         temp_path.replace(output_path)
     except Exception as exc:  # noqa: BLE001
@@ -164,6 +169,7 @@ def write_backend_workbook(
         )
         _format_long_text_columns(metadata_ws, ("Value",))
 
+        _enable_recalculation(wb)
         wb.save(temp_path)
         temp_path.replace(output_path)
     except Exception as exc:  # noqa: BLE001
@@ -327,6 +333,17 @@ def _assert_unique_headers(headers: list[str], sheet_name: str) -> None:
         raise OutputWriteError(f"Duplicate output headers in {sheet_name}: {duplicates}")
 
 
+def _enable_recalculation(wb: Workbook) -> None:
+    """Ask Excel to recalculate formula sheets when the workbook is opened."""
+
+    calculation = getattr(wb, "calculation", None)
+    if calculation is None:
+        return
+    calculation.calcMode = "auto"
+    calculation.fullCalcOnLoad = True
+    calculation.forceFullCalc = True
+
+
 def _safe_table(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum())
 
@@ -403,6 +420,10 @@ def build_formula_guide_rows(
          "Blank Sales Units, On Hand, transit, and Open PO are treated as zero for calculation only; "
          "raw source values are preserved in backend audit sheets.",
          "Calculations never break on blank inputs."],
+        ["Policy", "Visible values and formula audit",
+         "Inventory_Cover_Report contains ready-to-read calculated values; hidden Formula_Audit contains the same rows with Excel formulas.",
+         "This prevents blank-looking formula cells in previewers or Excel sessions that have not recalculated the file yet.",
+         "The team can read the report immediately, while formulas remain available for audit."],
         ["Formula", "Sales Days",
          F.sales_days_formula(window),
          f"Sales Days = MIN({window}, period end - start + 1). If period is missing but sales exist, {window} is used.",

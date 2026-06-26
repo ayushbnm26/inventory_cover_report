@@ -85,7 +85,7 @@ Pipeline 3 is backend-only. It does not create a team-facing workbook and does n
 
 ### Pipeline 4: Final Inventory Cover Calculation Engine
 
-Pipeline 4 reads the latest backend artifacts of Pipelines 1–3, builds a product-level universe (keyed by ASIN, falling back to Model Number / SKU), calculates inventory cover, and writes two professional workbooks. Calculation formulas are engraved into the team workbook cells (using Excel structured table references) so the team can audit and manipulate them directly.
+Pipeline 4 reads the latest backend artifacts of Pipelines 1-3, builds a product-level universe (keyed by ASIN, falling back to Model Number / SKU), calculates inventory cover, and writes two professional workbooks. The visible team report is written with ready-to-read calculated values so it does not appear blank in Excel previewers or sessions that have not recalculated formulas yet. The team workbook also includes a hidden `Formula_Audit` sheet with the same rows and Excel formulas for traceability.
 
 Source latest files consumed (interface contract):
 
@@ -111,10 +111,11 @@ data/processed/inventory_cover/latest/Inventory_Cover_Report_latest.xlsx
 data/processed/inventory_cover/latest/Inventory_Cover_Backend_Audit_latest.xlsx
 ```
 
-Team workbook sheets. The team-facing report intentionally omits backend-only diagnostic columns such as `Data Quality Flag`; those remain in the audit workbook:
+Team workbook sheets. The team-facing report intentionally omits backend-only diagnostic columns such as `Data Quality Flag`; those remain in the audit workbook. `Formula_Audit` is hidden by default and can be unhidden when formula traceability is needed:
 
 ```text
 Inventory_Cover_Report
+Formula_Audit
 Critical
 High_Risk
 Watch
@@ -137,7 +138,7 @@ Formula_Guide
 Run_Metadata
 ```
 
-Formula logic (engraved into team cells, all divide-by-zero safe):
+Formula logic (visible as values in the main report and engraved into `Formula_Audit`, all divide-by-zero safe):
 
 ```text
 Sales Days              = MIN(window, Sales Period End - Sales Period Start + 1)  (window default 30)
