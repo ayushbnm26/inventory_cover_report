@@ -22,6 +22,12 @@ from inventory_cover.pipelines.b2b_dispatch_pipeline import B2BDispatchPipeline
 from inventory_cover.pipelines.inventory_cover_pipeline import InventoryCoverPipeline
 from inventory_cover.pipelines.po_items_pipeline import PoItemsPipeline
 from inventory_cover.pipelines.sales_inventory_pipeline import SalesInventoryPipeline
+from inventory_cover.notifications import (
+    EmailConfigError,
+    EmailDeliveryConfig,
+    EmailDeliveryError,
+    deliver_inventory_cover_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -152,6 +158,9 @@ def add_inventory_cover_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--blank-numeric-policy", default=InventoryCoverPipelineConfig.blank_numeric_policy)
     parser.add_argument("--strict-freshness", action="store_true")
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--send-email", action="store_true", help="Email the generated team workbook after success.")
+    parser.add_argument("--email-dry-run", action="store_true", help="Build and audit the email without SMTP.")
+    parser.add_argument("--email-env-file", type=Path, default=Path(".env"), help="Local .env file for email settings.")
 
 
 def add_full_inventory_cover_args(parser: argparse.ArgumentParser) -> None:
@@ -194,6 +203,20 @@ def run_inventory_cover_from_args(args: argparse.Namespace) -> int:
     print(f"Products: {result.product_count}")
     print(f"Validation issues: {result.validation_issue_count}")
     print(f"Warnings: {result.warning_count}")
+    if getattr(args, "send_email", False):
+        try:
+            email_config = EmailDeliveryConfig.from_environment(env_file=args.email_env_file)
+            delivery = deliver_inventory_cover_report(
+                result,
+                email_config,
+                dry_run=getattr(args, "email_dry_run", False),
+            )
+            print(f"Email delivery status: {delivery.status}")
+            print(f"Email audit: {delivery.audit_file}")
+            print(f"Email log: {delivery.log_file}")
+        except (EmailConfigError, EmailDeliveryError) as exc:
+            print(f"ERROR: Email delivery failed: {exc}", file=sys.stderr)
+            return 1
     return 0
 
 

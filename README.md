@@ -183,6 +183,93 @@ Run the entire project end-to-end (all source pipelines, then the engine):
 python -m inventory_cover.cli run-full-inventory-cover
 ```
 
+## Automated Email Delivery
+
+The engine can optionally email the run-specific team workbook after Pipeline 4 completes successfully. Email delivery is an explicit final layer: it does not change calculations, source artifacts, workbook formulas, sheet names, or latest-copy behavior. No email is sent unless `--send-email` is provided.
+
+Only the team-facing workbook is attached by default:
+
+```text
+runs/<RUN_ID>/outputs/inventory_cover/Inventory_Cover_Report_<RUN_ID>.xlsx
+```
+
+Create a local `.env` file from `.env.example` and keep it private. Never commit `.env` or real SMTP credentials.
+
+Required email settings:
+
+```text
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=30
+
+REPORT_EMAIL_TO=
+REPORT_EMAIL_CC=
+REPORT_EMAIL_BCC=
+REPORT_EMAIL_REPLY_TO=
+REPORT_EMAIL_SUBJECT_PREFIX=Inventory Cover Report
+```
+
+Example `.env` with placeholders only:
+
+```text
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=<smtp-username>
+SMTP_PASSWORD=<smtp-password-or-app-password>
+SMTP_FROM=<sender@example.com>
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+SMTP_TIMEOUT_SECONDS=30
+
+REPORT_EMAIL_TO=<recipient@example.com>
+REPORT_EMAIL_CC=
+REPORT_EMAIL_BCC=
+REPORT_EMAIL_REPLY_TO=
+REPORT_EMAIL_SUBJECT_PREFIX=Inventory Cover Report
+```
+
+Dry-run the email layer without connecting to SMTP:
+
+```bash
+python -m inventory_cover.cli run-inventory-cover --send-email --email-dry-run
+python -m inventory_cover.cli run-full-inventory-cover --send-email --email-dry-run
+```
+
+Send through SMTP after a successful run:
+
+```bash
+python -m inventory_cover.cli run-inventory-cover --send-email
+python -m inventory_cover.cli run-full-inventory-cover --send-email
+```
+
+Gmail and some hosted mail providers usually require an app password or SMTP-specific credential instead of the normal account password. Use the provider's current SMTP host, port, and TLS/SSL guidance.
+
+Each attempted send writes traceability artifacts under the Pipeline 4 run folder:
+
+```text
+runs/<RUN_ID>/notifications/email_delivery.json
+runs/<RUN_ID>/logs/email_delivery.log
+```
+
+The audit JSON records the run ID, recipients, sanitized SMTP settings, subject, attachment path, report context dates, timestamps, dry-run status, and any sanitized error. It never records SMTP passwords.
+
+Troubleshooting:
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `SMTP_HOST is required` | `.env` missing or incomplete | Set `SMTP_HOST` in `.env` or environment. |
+| `SMTP_PORT must be an integer` | Invalid port value | Use a numeric port such as `587` or `465`. |
+| `SMTP_USE_TLS and SMTP_USE_SSL cannot both be true` | Conflicting security mode | Use STARTTLS or SSL, not both. |
+| `SMTP_PASSWORD is required for network email delivery` | Real send requested without password | Add the SMTP password or app password outside Git. |
+| `SMTP_AUTHENTICATION_FAILED` | Bad username/password or provider policy | Verify credentials, app-password setup, and sender account. |
+| `SMTP_RECIPIENT_REJECTED` | Recipient blocked or malformed | Check `REPORT_EMAIL_TO`, `REPORT_EMAIL_CC`, and `REPORT_EMAIL_BCC`. |
+| `Attachment does not exist` | Report generation did not produce the run workbook | Inspect the Pipeline 4 output path and run log. |
+
 Source-failure behaviour for the full command is configurable:
 
 ```bash

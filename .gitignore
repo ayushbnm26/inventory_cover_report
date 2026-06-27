@@ -20,6 +20,7 @@ env/
 # Local environment and secrets
 .env
 .env.*
+!.env.example
 
 # Generated business data and run artifacts
 runs/
