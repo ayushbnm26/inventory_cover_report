@@ -179,18 +179,21 @@ class B2BDispatchPipeline:
                 sum(record.rows_rejected for record in sheet_audit),
             )
 
-            if not rows:
-                raise CatastrophicPipelineError("Zero rows written after processing all valid sheets.")
-
-            rows_to_write, duplicate_issues, duplicate_records = attach_b2b_duplicate_findings(
-                rows,
-                dedupe_exact_rows=self.config.dedupe_exact_rows,
-            )
-            validation_issues.extend(duplicate_issues)
-            _annotate_dedupe_drops(sheet_audit, rows, rows_to_write)
-
-            if not rows_to_write:
-                raise CatastrophicPipelineError("All rows were removed by dedupe; output not created.")
+            if rows:
+                rows_to_write, duplicate_issues, duplicate_records = attach_b2b_duplicate_findings(
+                    rows,
+                    dedupe_exact_rows=self.config.dedupe_exact_rows,
+                )
+                validation_issues.extend(duplicate_issues)
+                _annotate_dedupe_drops(sheet_audit, rows, rows_to_write)
+            else:
+                rows_to_write = []
+                logger.warning(
+                    "No dispatch rows were included for %s through %s; writing an empty latest backend "
+                    "so downstream transit is zero for this run.",
+                    lookback_start,
+                    lookback_end,
+                )
 
             summary = _build_run_summary(
                 run_id=run_id,

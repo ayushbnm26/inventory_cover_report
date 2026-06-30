@@ -53,7 +53,6 @@ REQUIRED_FIELDS: tuple[str, ...] = (
     "Quantity Received",
     "Quantity Outstanding",
     "Unit Cost",
-    "Total Cost",
 )
 
 OPTIONAL_FIELDS: tuple[str, ...] = (

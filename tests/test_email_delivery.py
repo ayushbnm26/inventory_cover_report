@@ -124,14 +124,14 @@ def test_email_message_includes_subject_recipients_body_and_attachment(tmp_path:
 
     message = build_email_message(context, config, mail_timestamp="2026-06-27T10:01:00+05:30")
 
-    assert message["Subject"] == (
-        "Inventory Cover Report | Run RUN123 | Sales 2026-06-01 to 2026-06-26 | Inventory 2026-06-26"
-    )
+    assert message["Subject"] == "Inventory Cover Report - 2026-06-27"
     assert message["To"] == "ayushbnm26@gmail.com"
     assert message["Cc"] == "cc@example.com"
     body = message.get_body(preferencelist=("plain",)).get_content()
-    assert "Run ID:\nRUN123" in body
-    assert "- B2B dispatch lookback end: 2026-06-26" in body
+    assert "Hi," in body
+    assert "Please find attached the Inventory Cover Report for 2026-06-27." in body
+    assert "- Sales period: 2026-06-01 to 2026-06-26" in body
+    assert "- Inventory report updated: 2026-06-26" in body
     attachments = list(message.iter_attachments())
     assert len(attachments) == 1
     assert attachments[0].get_filename() == "Inventory_Cover_Report_RUN123.xlsx"

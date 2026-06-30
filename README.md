@@ -26,6 +26,8 @@ Input folder:
 data/incoming/po_items/
 ```
 
+Drop the day's PO Items workbooks into this folder before running the pipeline. The engine will discover the files in that directory, process them for the current run, and copy the raw inputs into the timestamped `runs/<RUN_ID>/inputs/` folder for traceability.
+
 Latest outputs:
 
 ```text
@@ -42,6 +44,8 @@ Input folder:
 ```text
 data/incoming/b2b_dispatch/
 ```
+
+Drop the daily B2B Dispatch workbook into this folder before running the pipeline. The engine reads the current file(s), builds the backend audit, and preserves a run copy under `runs/<RUN_ID>/inputs/`.
 
 Latest output:
 
@@ -62,6 +66,8 @@ data/incoming/sales/
 data/incoming/inventory/
 data/reference/sales_inventory_mapping/
 ```
+
+Drop the daily sales export into `data/incoming/sales/` and the daily inventory export into `data/incoming/inventory/`. The mapping folder is optional and may stay static if you use it.
 
 The mapping folder is optional. If exactly one `.xlsx` workbook is present, Pipeline 3 uses it as an ASIN/SKU reference for blank identifiers only. The expected mapping columns are `ASIN`, `SKU`, and optionally `Master SKU`.
 
@@ -213,6 +219,14 @@ REPORT_EMAIL_BCC=
 REPORT_EMAIL_REPLY_TO=
 REPORT_EMAIL_SUBJECT_PREFIX=Inventory Cover Report
 ```
+
+The automated email subject is intentionally concise and date-driven. By default it follows:
+
+```text
+Inventory Cover Report - <report date>
+```
+
+The email body is a short professional note that references the report period, sales window, inventory report date, and B2B dispatch window from the generated run artifacts.
 
 Example `.env` with placeholders only:
 

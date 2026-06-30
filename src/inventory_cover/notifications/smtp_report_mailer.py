@@ -195,59 +195,62 @@ def build_email_message(
 
 
 def render_subject(context: EmailReportContext, config: EmailDeliveryConfig) -> str:
-    sales_start = context.report_context["sales_period_start"]
-    sales_end = context.report_context["sales_period_end"]
-    inventory_date = (
-        context.report_context["inventory_report_updated_date"]
-        if context.report_context["inventory_report_updated_date"] != NOT_AVAILABLE
-        else context.report_context["inventory_period_end"]
-    )
-    if sales_start == NOT_AVAILABLE or sales_end == NOT_AVAILABLE or inventory_date == NOT_AVAILABLE:
-        return f"{config.subject_prefix} | Run {context.run_id} | Report Dates Not Fully Available"
-    return (
-        f"{config.subject_prefix} | Run {context.run_id} | Sales {sales_start} to {sales_end} "
-        f"| Inventory {inventory_date}"
-    )
+    report_date = _pick_email_report_date(context)
+    if report_date == NOT_AVAILABLE:
+        return config.subject_prefix
+    return f"{config.subject_prefix} - {report_date}"
 
 
 def render_body(context: EmailReportContext, *, mail_timestamp: str) -> str:
     rc = context.report_context
+    report_date = _pick_email_report_date(context)
     return "\n".join(
         [
-            "Inventory Cover Report generated successfully.",
+            "Hi,",
             "",
-            "Run ID:",
-            context.run_id,
-            "Generated at:",
-            context.generated_at,
-            "Email sent at:",
-            mail_timestamp,
-            "Attached workbook:",
-            context.team_workbook_name,
+            f"Please find attached the Inventory Cover Report for {report_date}.",
             "",
-            "Report context:",
-            f"- Sales period start: {rc['sales_period_start']}",
-            f"- Sales period end: {rc['sales_period_end']}",
-            f"- Sales report updated date: {rc['sales_report_updated_date']}",
-            f"- Inventory period start: {rc['inventory_period_start']}",
-            f"- Inventory period end: {rc['inventory_period_end']}",
-            f"- Inventory report updated date: {rc['inventory_report_updated_date']}",
-            f"- B2B dispatch as-of date: {rc['b2b_dispatch_as_of_date']}",
-            f"- B2B dispatch lookback start: {rc['b2b_dispatch_lookback_start']}",
-            f"- B2B dispatch lookback end: {rc['b2b_dispatch_lookback_end']}",
+            "The report has been generated from the latest available source files and current run artifacts.",
+            "Source coverage:",
+            f"- Sales period: {rc['sales_period_start']} to {rc['sales_period_end']}",
+            f"- Sales report updated: {rc['sales_report_updated_date']}",
+            f"- Inventory report updated: {rc['inventory_report_updated_date']}",
+            "- B2B dispatch: current run date with a 2-day lookback window",
             "",
-            "Run summary:",
-            f"- Product count: {context.product_count}",
-            f"- Validation issue count: {context.validation_issue_count}",
-            f"- Warning count: {context.warning_count}",
-            f"- Team workbook: {context.team_workbook_path}",
-            f"- Backend audit workbook: {context.backend_workbook_path}",
+            f"Attachment: {context.team_workbook_name}",
+            f"Generated at: {context.generated_at}",
             "",
-            "Note:",
-            "This email was generated automatically after the Inventory Cover engine completed successfully.",
+            "Regards,",
+            "Ayush Kumar",
             "",
         ]
     )
+
+
+def _pick_email_report_date(context: EmailReportContext) -> str:
+    generated_date = _date_part(context.generated_at)
+    if generated_date != NOT_AVAILABLE:
+        return generated_date
+
+    rc = context.report_context
+    for key in (
+        "inventory_report_updated_date",
+        "sales_report_updated_date",
+        "b2b_dispatch_as_of_date",
+        "sales_period_end",
+        "inventory_period_end",
+    ):
+        value = rc.get(key, NOT_AVAILABLE)
+        if value != NOT_AVAILABLE:
+            return value
+    return NOT_AVAILABLE
+
+
+def _date_part(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        return text[:10]
+    return NOT_AVAILABLE
 
 
 def _send_message(

@@ -166,6 +166,29 @@ def test_date_filtering_keeps_today_and_yesterday_only(tmp_path: Path) -> None:
     assert "OUTSIDE_LOOKBACK_WINDOW" in issue_types
 
 
+def test_zero_rows_in_lookback_writes_empty_latest_backend(tmp_path: Path) -> None:
+    input_dir = tmp_path / "incoming"
+    input_dir.mkdir()
+    _write_dispatch_workbook(
+        input_dir / "B2B DISPATCH TRACKER.xlsx",
+        rows_by_sheet={
+            RK_SHEET: [
+                _row(po="PO-OLD", dispatch_date="24-06-2026"),
+                _row(po="PO-OLDER", dispatch_date="23-06-2026"),
+            ]
+        },
+        include_sheets=(RK_SHEET,),
+    )
+
+    result = B2BDispatchPipeline(_config(tmp_path, input_dir, allow_missing=True)).run()
+
+    assert result.rows_written == 0
+    assert result.backend_latest_file.exists()
+    assert _master_records(result.backend_output_file) == []
+    assert _master_records(result.backend_latest_file) == []
+    assert "OUTSIDE_LOOKBACK_WINDOW" in _issue_types(result.backend_output_file)
+
+
 def test_invalid_dispatch_dates_are_rejected_and_logged(tmp_path: Path) -> None:
     input_dir = tmp_path / "incoming"
     input_dir.mkdir()

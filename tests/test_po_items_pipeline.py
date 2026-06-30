@@ -148,13 +148,13 @@ def test_invalid_file_is_skipped_but_run_continues(tmp_path: Path) -> None:
 
 def test_missing_critical_headers_file_level_failure(tmp_path: Path) -> None:
     workbook_path = tmp_path / "bad.xlsx"
-    headers = [header for header in HEADERS if header != "ASIN"]
+    headers = [header for header in HEADERS if header != "Unit Cost"]
     _write_po_workbook(workbook_path, [_row()], headers=headers)
 
     with pytest.raises(FileValidationError) as exc:
         read_po_items_workbook(workbook_path, _config(tmp_path, tmp_path))
 
-    assert "ASIN" in str(exc.value)
+    assert "Unit Cost" in str(exc.value)
 
 
 def test_dedupe_exact_rows_drops_later_copy_with_audit(tmp_path: Path) -> None:

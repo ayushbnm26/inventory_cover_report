@@ -34,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="inventory-cover")
     subparsers = parser.add_subparsers(dest="command")
 
+    cleanup_parser = subparsers.add_parser(
+        "stage-latest-inputs",
+        help="Replace incoming folders with the latest source workbooks before running the pipelines.",
+    )
+    add_stage_latest_inputs_args(cleanup_parser)
+
     po_parser = subparsers.add_parser("run-po-items", help="Run the PO Items consolidation pipeline.")
     add_po_items_args(po_parser)
 
@@ -165,11 +171,53 @@ def add_inventory_cover_args(parser: argparse.ArgumentParser) -> None:
 
 def add_full_inventory_cover_args(parser: argparse.ArgumentParser) -> None:
     add_inventory_cover_args(parser)
+    parser.add_argument("--parallel", action="store_true", help="Run independent source pipelines concurrently.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed pipeline in sequential mode.")
+    parser.add_argument("--min-free-gb", type=float, default=1.0, help="Minimum free disk space required before starting.")
+    parser.add_argument("--dedupe-exact-rows", action="store_true", help="Apply exact-row dedupe in every source pipeline.")
+
+    parser.add_argument("--po-input-dir", type=Path, default=PipelineConfig.input_dir)
+    parser.add_argument("--po-processed-dir", type=Path, default=PipelineConfig.processed_dir)
+    parser.add_argument("--po-min-files", type=int, default=2)
+    parser.add_argument("--po-max-files", type=int, default=10)
+    parser.add_argument("--po-allow-single-file", action="store_true")
+    parser.add_argument("--po-allow-more-than-max-files", action="store_true")
+
+    parser.add_argument("--b2b-input-dir", type=Path, default=B2BDispatchPipelineConfig.input_dir)
+    parser.add_argument("--b2b-processed-dir", type=Path, default=B2BDispatchPipelineConfig.processed_dir)
+    parser.add_argument("--b2b-as-of-date", type=_parse_iso_date)
+    parser.add_argument("--b2b-lookback-days", type=int, default=2)
+    parser.add_argument("--b2b-allow-multiple-files", action="store_true")
+    parser.add_argument("--b2b-allow-missing-target-sheets", action="store_true")
+
+    parser.add_argument("--sales-input-dir", type=Path, default=SalesInventoryPipelineConfig.sales_input_dir)
+    parser.add_argument("--inventory-input-dir", type=Path, default=SalesInventoryPipelineConfig.inventory_input_dir)
+    parser.add_argument("--mapping-input-dir", type=Path, default=SalesInventoryPipelineConfig.mapping_input_dir)
+    parser.add_argument("--sales-inventory-processed-dir", type=Path, default=SalesInventoryPipelineConfig.processed_dir)
+    parser.add_argument("--require-sales", action="store_true")
+    parser.add_argument("--require-inventory", action="store_true")
+    parser.add_argument("--allow-multiple-sales-files", action="store_true")
+    parser.add_argument("--allow-multiple-inventory-files", action="store_true")
+    parser.add_argument("--skip-po-items", action="store_true")
+    parser.add_argument("--skip-b2b-dispatch", action="store_true")
+    parser.add_argument("--skip-sales-inventory", action="store_true")
+
     parser.add_argument("--skip-source-pipelines", action="store_true")
-    parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--continue-on-source-warning", action="store_true")
-    parser.add_argument("--parallel", action="store_true")
-    parser.add_argument("--min-free-gb", type=float, default=1.0)
+
+
+def add_stage_latest_inputs_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--po-source", type=Path, nargs="+", required=True, help="Latest PO workbook(s) to stage.")
+    parser.add_argument("--b2b-source", type=Path, required=True, help="Latest B2B dispatch workbook to stage.")
+    parser.add_argument("--sales-source", type=Path, required=True, help="Latest sales workbook to stage.")
+    parser.add_argument("--inventory-source", type=Path, required=True, help="Latest inventory workbook to stage.")
+    parser.add_argument("--po-input-dir", type=Path, default=PipelineConfig.input_dir)
+    parser.add_argument("--b2b-input-dir", type=Path, default=B2BDispatchPipelineConfig.input_dir)
+    parser.add_argument("--sales-input-dir", type=Path, default=SalesInventoryPipelineConfig.sales_input_dir)
+    parser.add_argument("--inventory-input-dir", type=Path, default=SalesInventoryPipelineConfig.inventory_input_dir)
+    parser.add_argument("--clean-first", action="store_true", default=True, help="Remove existing .xlsx files first.")
+    parser.add_argument("--keep-backups", action="store_true", help="Keep a copy of removed files in a backup folder.")
+    parser.add_argument("--backup-root", type=Path, default=Path(".tmp") / "input_backups")
 
 
 def inventory_cover_config_from_args(args: argparse.Namespace) -> InventoryCoverPipelineConfig:
@@ -188,6 +236,20 @@ def inventory_cover_config_from_args(args: argparse.Namespace) -> InventoryCover
         strict_freshness=args.strict_freshness,
         log_level=args.log_level,
     )
+
+
+def stage_latest_inputs_from_args(args: argparse.Namespace) -> int:
+    staged = [
+        _stage_input_folder(Path(args.po_input_dir), [Path(p) for p in args.po_source], args),
+        _stage_input_folder(Path(args.b2b_input_dir), [Path(args.b2b_source)], args),
+        _stage_input_folder(Path(args.sales_input_dir), [Path(args.sales_source)], args),
+        _stage_input_folder(Path(args.inventory_input_dir), [Path(args.inventory_source)], args),
+    ]
+    for folder, copied in staged:
+        print(f"Staged {len(copied)} file(s) into {folder}")
+        for source, target in copied:
+            print(f"  {source} -> {target}")
+    return 0
 
 
 def run_inventory_cover_from_args(args: argparse.Namespace) -> int:
@@ -220,6 +282,29 @@ def run_inventory_cover_from_args(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_input_folder(folder: Path, sources: list[Path], args: argparse.Namespace) -> tuple[Path, list[tuple[Path, Path]]]:
+    folder.mkdir(parents=True, exist_ok=True)
+    if args.clean_first:
+        existing = [path for path in folder.iterdir() if path.is_file() and path.suffix.lower() == ".xlsx"]
+        backup_dir = None
+        if args.keep_backups and existing:
+            backup_dir = Path(args.backup_root) / folder.name
+            backup_dir.mkdir(parents=True, exist_ok=True)
+        for path in existing:
+            if backup_dir is not None:
+                shutil.copy2(path, backup_dir / path.name)
+            path.unlink()
+
+    copied: list[tuple[Path, Path]] = []
+    for source in sources:
+        if not source.exists():
+            raise PipelineError(f"Source workbook does not exist: {source}")
+        target = folder / source.name
+        shutil.copy2(source, target)
+        copied.append((source, target))
+    return folder, copied
+
+
 def run_full_inventory_cover_from_args(args: argparse.Namespace) -> int:
     source_ok = True
     if not args.skip_source_pipelines:
@@ -247,23 +332,7 @@ def run_full_inventory_cover_from_args(args: argparse.Namespace) -> int:
 
 
 def _run_full_source_pipelines(args: argparse.Namespace) -> list["SourcePipelineOutcome"]:
-    tasks = [
-        SourcePipelineTask(
-            name="Pipeline 1: PO Items",
-            command="run-po-items",
-            runner=lambda: PoItemsPipeline(PipelineConfig(log_level=args.log_level)).run(),
-        ),
-        SourcePipelineTask(
-            name="Pipeline 2: B2B Dispatch",
-            command="run-b2b-dispatch",
-            runner=lambda: B2BDispatchPipeline(B2BDispatchPipelineConfig(log_level=args.log_level)).run(),
-        ),
-        SourcePipelineTask(
-            name="Pipeline 3: Sales & Inventory",
-            command="run-sales-inventory",
-            runner=lambda: SalesInventoryPipeline(SalesInventoryPipelineConfig(log_level=args.log_level)).run(),
-        ),
-    ]
+    tasks = _build_source_pipeline_tasks(args)
     if args.parallel:
         return _run_tasks_parallel(tasks)
     return _run_tasks_sequential(tasks, fail_fast=args.fail_fast)
@@ -396,12 +465,13 @@ def run_source_pipelines_from_args(args: argparse.Namespace) -> int:
 
 def list_pipelines_from_args(args: argparse.Namespace) -> int:
     print("Available pipelines:")
-    print("1. run-po-items")
-    print("2. run-b2b-dispatch")
-    print("3. run-sales-inventory")
-    print("4. run-source-pipelines")
-    print("5. run-inventory-cover")
-    print("6. run-full-inventory-cover")
+    print("1. stage-latest-inputs")
+    print("2. run-po-items")
+    print("3. run-b2b-dispatch")
+    print("4. run-sales-inventory")
+    print("5. run-source-pipelines")
+    print("6. run-inventory-cover")
+    print("7. run-full-inventory-cover")
     return 0
 
 
@@ -414,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "run-po-items":
             return run_po_items_from_args(args)
+        if args.command == "stage-latest-inputs":
+            return stage_latest_inputs_from_args(args)
         if args.command == "run-b2b-dispatch":
             return run_b2b_dispatch_from_args(args)
         if args.command == "run-sales-inventory":
