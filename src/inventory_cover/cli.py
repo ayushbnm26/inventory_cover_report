@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -28,6 +29,10 @@ from inventory_cover.notifications import (
     EmailDeliveryError,
     deliver_inventory_cover_report,
 )
+from inventory_cover.notifications.email_config import load_dotenv_values
+
+
+_DOTENV_CACHE: dict[str, str] | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,11 +92,15 @@ def add_po_items_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_b2b_dispatch_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source", choices=("excel", "google-sheets"), default=None)
     parser.add_argument("--input-dir", type=Path, default=B2BDispatchPipelineConfig.input_dir)
     parser.add_argument("--run-root", type=Path, default=B2BDispatchPipelineConfig.run_root)
     parser.add_argument("--processed-dir", type=Path, default=B2BDispatchPipelineConfig.processed_dir)
-    parser.add_argument("--as-of-date", type=_parse_iso_date)
-    parser.add_argument("--lookback-days", type=int, default=2)
+    parser.add_argument("--as-of-date", "--b2b-as-of-date", dest="as_of_date", type=_parse_iso_date)
+    parser.add_argument("--lookback-days", "--b2b-lookback-days", dest="lookback_days", type=int, default=2)
+    parser.add_argument("--google-spreadsheet-id", default=None)
+    parser.add_argument("--google-credentials-path", type=Path, default=None)
+    parser.add_argument("--google-token-path", type=Path, default=None)
     parser.add_argument("--allow-multiple-files", action="store_true")
     parser.add_argument("--allow-missing-target-sheets", action="store_true")
     parser.add_argument("--dedupe-exact-rows", action="store_true")
@@ -133,8 +142,12 @@ def add_source_pipelines_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--b2b-input-dir", type=Path, default=B2BDispatchPipelineConfig.input_dir)
     parser.add_argument("--b2b-processed-dir", type=Path, default=B2BDispatchPipelineConfig.processed_dir)
+    parser.add_argument("--b2b-source", choices=("excel", "google-sheets"), default=None)
     parser.add_argument("--b2b-as-of-date", type=_parse_iso_date)
     parser.add_argument("--b2b-lookback-days", type=int, default=2)
+    parser.add_argument("--b2b-google-spreadsheet-id", default=None)
+    parser.add_argument("--b2b-google-credentials-path", type=Path, default=None)
+    parser.add_argument("--b2b-google-token-path", type=Path, default=None)
     parser.add_argument("--b2b-allow-multiple-files", action="store_true")
     parser.add_argument("--b2b-allow-missing-target-sheets", action="store_true")
 
@@ -185,8 +198,12 @@ def add_full_inventory_cover_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--b2b-input-dir", type=Path, default=B2BDispatchPipelineConfig.input_dir)
     parser.add_argument("--b2b-processed-dir", type=Path, default=B2BDispatchPipelineConfig.processed_dir)
+    parser.add_argument("--b2b-source", choices=("excel", "google-sheets"), default=None)
     parser.add_argument("--b2b-as-of-date", type=_parse_iso_date)
     parser.add_argument("--b2b-lookback-days", type=int, default=2)
+    parser.add_argument("--b2b-google-spreadsheet-id", default=None)
+    parser.add_argument("--b2b-google-credentials-path", type=Path, default=None)
+    parser.add_argument("--b2b-google-token-path", type=Path, default=None)
     parser.add_argument("--b2b-allow-multiple-files", action="store_true")
     parser.add_argument("--b2b-allow-missing-target-sheets", action="store_true")
 
@@ -359,10 +376,26 @@ def b2b_config_from_args(args: argparse.Namespace) -> B2BDispatchPipelineConfig:
         processed_dir=args.processed_dir,
         as_of_date=args.as_of_date,
         lookback_days=args.lookback_days,
+        source_mode=_b2b_source_mode_from_args(getattr(args, "source", None)),
         allow_multiple_files=args.allow_multiple_files,
         allow_missing_target_sheets=args.allow_missing_target_sheets,
         dedupe_exact_rows=args.dedupe_exact_rows,
         log_level=args.log_level,
+        google_spreadsheet_id=_arg_or_env(
+            getattr(args, "google_spreadsheet_id", None),
+            "B2B_GOOGLE_SPREADSHEET_ID",
+            B2BDispatchPipelineConfig.google_spreadsheet_id,
+        ),
+        google_credentials_path=_path_arg_or_env(
+            getattr(args, "google_credentials_path", None),
+            "B2B_GOOGLE_CREDENTIALS_PATH",
+            B2BDispatchPipelineConfig.google_credentials_path,
+        ),
+        google_token_path=_path_arg_or_env(
+            getattr(args, "google_token_path", None),
+            "B2B_GOOGLE_TOKEN_PATH",
+            B2BDispatchPipelineConfig.google_token_path,
+        ),
     )
 
 
@@ -512,6 +545,51 @@ def _parse_iso_date(value: str) -> date:
         raise argparse.ArgumentTypeError("Expected date in YYYY-MM-DD format.") from exc
 
 
+def _b2b_source_mode_from_args(explicit_source: str | None) -> str:
+    if explicit_source:
+        return explicit_source.strip().lower().replace("-", "_")
+    if _env_flag_enabled("B2B_GOOGLE_SHEETS_ENABLED"):
+        return "google_sheets"
+    return "excel"
+
+
+def _arg_or_env(value: str | None, env_key: str, default: str) -> str:
+    if value is not None and str(value).strip():
+        return str(value).strip()
+    env_value = _env_config_value(env_key)
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return default
+
+
+def _path_arg_or_env(value: Path | None, env_key: str, default: Path) -> Path:
+    if value is not None:
+        return value
+    env_value = _env_config_value(env_key)
+    if env_value is not None and env_value.strip():
+        return Path(env_value.strip())
+    return default
+
+
+def _env_flag_enabled(env_key: str) -> bool:
+    value = _env_config_value(env_key) or ""
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_config_value(env_key: str) -> str | None:
+    if env_key in os.environ:
+        return os.environ.get(env_key)
+    return _project_dotenv_values().get(env_key)
+
+
+def _project_dotenv_values() -> dict[str, str]:
+    global _DOTENV_CACHE
+    if _DOTENV_CACHE is None:
+        env_file = Path(".env")
+        _DOTENV_CACHE = load_dotenv_values(env_file) if env_file.exists() else {}
+    return _DOTENV_CACHE
+
+
 def _build_source_pipeline_tasks(args: argparse.Namespace) -> list[SourcePipelineTask]:
     tasks: list[SourcePipelineTask] = []
     if not args.skip_po_items:
@@ -540,10 +618,26 @@ def _build_source_pipeline_tasks(args: argparse.Namespace) -> list[SourcePipelin
             processed_dir=args.b2b_processed_dir,
             as_of_date=args.b2b_as_of_date,
             lookback_days=args.b2b_lookback_days,
+            source_mode=_b2b_source_mode_from_args(getattr(args, "b2b_source", None)),
             allow_multiple_files=args.b2b_allow_multiple_files,
             allow_missing_target_sheets=args.b2b_allow_missing_target_sheets,
             dedupe_exact_rows=args.dedupe_exact_rows,
             log_level=args.log_level,
+            google_spreadsheet_id=_arg_or_env(
+                getattr(args, "b2b_google_spreadsheet_id", None),
+                "B2B_GOOGLE_SPREADSHEET_ID",
+                B2BDispatchPipelineConfig.google_spreadsheet_id,
+            ),
+            google_credentials_path=_path_arg_or_env(
+                getattr(args, "b2b_google_credentials_path", None),
+                "B2B_GOOGLE_CREDENTIALS_PATH",
+                B2BDispatchPipelineConfig.google_credentials_path,
+            ),
+            google_token_path=_path_arg_or_env(
+                getattr(args, "b2b_google_token_path", None),
+                "B2B_GOOGLE_TOKEN_PATH",
+                B2BDispatchPipelineConfig.google_token_path,
+            ),
         )
         tasks.append(
             SourcePipelineTask(

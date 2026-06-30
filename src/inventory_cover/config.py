@@ -62,12 +62,19 @@ class B2BDispatchPipelineConfig:
     processed_dir: Path = PROJECT_ROOT / "data" / "processed" / "b2b_dispatch"
     lookback_days: int = 2
     as_of_date: date | None = None
+    source_mode: str = "excel"
     allow_multiple_files: bool = False
     allow_missing_target_sheets: bool = False
     dedupe_exact_rows: bool = False
     log_level: str = "INFO"
     header_scan_rows: int = 30
     value_difference_tolerance: float = 1.0
+    google_spreadsheet_id: str = ""
+    google_credentials_path: Path = PROJECT_ROOT / "secrets" / "google_oauth" / "credentials.json"
+    google_token_path: Path = PROJECT_ROOT / "secrets" / "google_oauth" / "token.json"
+    google_readonly_scope: tuple[str, ...] = ("https://www.googleapis.com/auth/spreadsheets.readonly",)
+    google_values_max_rows: int = 20000
+    google_values_max_column: str = "AZ"
 
     def resolved(self) -> "B2BDispatchPipelineConfig":
         """Return a copy with filesystem paths resolved against the project root."""
@@ -85,12 +92,19 @@ class B2BDispatchPipelineConfig:
             processed_dir=resolve(self.processed_dir),
             lookback_days=self.lookback_days,
             as_of_date=self.as_of_date,
+            source_mode=self.source_mode,
             allow_multiple_files=self.allow_multiple_files,
             allow_missing_target_sheets=self.allow_missing_target_sheets,
             dedupe_exact_rows=self.dedupe_exact_rows,
             log_level=self.log_level,
             header_scan_rows=self.header_scan_rows,
             value_difference_tolerance=self.value_difference_tolerance,
+            google_spreadsheet_id=self.google_spreadsheet_id,
+            google_credentials_path=resolve(self.google_credentials_path),
+            google_token_path=resolve(self.google_token_path),
+            google_readonly_scope=tuple(self.google_readonly_scope),
+            google_values_max_rows=self.google_values_max_rows,
+            google_values_max_column=self.google_values_max_column,
         )
 
 

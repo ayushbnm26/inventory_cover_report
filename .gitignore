@@ -41,3 +41,8 @@ logs/
 # OS clutter
 .DS_Store
 Thumbs.db
+# Google OAuth local secrets
+secrets/
+credentials.json
+token.json
+*.oauth.json

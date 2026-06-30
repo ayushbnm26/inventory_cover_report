@@ -55,6 +55,96 @@ data/processed/b2b_dispatch/latest/B2B_Dispatch_Backend_Audit_latest.xlsx
 
 Pipeline 2 does not create a team-facing workbook.
 
+Local Excel mode remains the fallback and the default:
+
+```bash
+python -m inventory_cover.cli run-b2b-dispatch --input-dir data/incoming/b2b_dispatch
+python scripts/run_b2b_dispatch_pipeline.py --input-dir data/incoming/b2b_dispatch
+```
+
+Pipeline 2 can also acquire the B2B dispatch source directly from Google Sheets. This mode still writes the same backend workbook and sheet consumed by Pipeline 4:
+
+```text
+data/processed/b2b_dispatch/latest/B2B_Dispatch_Backend_Audit_latest.xlsx
+sheet: B2B_Dispatch_Master
+```
+
+Pipeline 4 continues to consume only the latest backend artifact and does not read Google Sheets directly.
+
+Google Sheets mode reads only these three tabs from the configured spreadsheet:
+
+```text
+RK PO 007GK
+CLICKTECK DISPATCH 
+ETRADE DISPATCH 
+```
+
+The source tab spelling is `CLICKTECK`; the reader also tolerates the historical `CLICKTECH` spelling through normalized title matching. Actual tab names, including trailing spaces, are preserved in audit output.
+
+The dispatch date window is inclusive. With `--b2b-as-of-date 2026-06-30 --b2b-lookback-days 2`, Pipeline 2 includes dispatch dates 2026-06-28, 2026-06-29, and 2026-06-30. Rows outside the window are excluded from `B2B_Dispatch_Master` and represented in validation/audit output.
+
+Google Sheets OAuth setup:
+
+1. In Google Cloud, create or select a project.
+2. Enable the Google Sheets API.
+3. Configure an OAuth consent screen appropriate for an internal Desktop app.
+4. Create OAuth Client ID credentials for a Desktop app.
+5. Download the client JSON and save it locally as:
+
+```text
+secrets/google_oauth/credentials.json
+```
+
+The Google account that authorizes the Desktop flow only needs viewer access to the spreadsheet. The integration uses readonly scope only:
+
+```text
+https://www.googleapis.com/auth/spreadsheets.readonly
+```
+
+Configure Google mode with process environment variables or a local `.env` file:
+
+```text
+B2B_GOOGLE_SHEETS_ENABLED=false
+B2B_GOOGLE_SPREADSHEET_ID=<google-spreadsheet-id>
+B2B_GOOGLE_CREDENTIALS_PATH=secrets/google_oauth/credentials.json
+B2B_GOOGLE_TOKEN_PATH=secrets/google_oauth/token.json
+```
+
+Or pass the mode and spreadsheet settings on the CLI:
+
+```bash
+python -m inventory_cover.cli run-b2b-dispatch \
+  --source google-sheets \
+  --google-spreadsheet-id <google-spreadsheet-id> \
+  --b2b-as-of-date 2026-06-30 \
+  --b2b-lookback-days 2
+```
+
+```bash
+python scripts/run_b2b_dispatch_pipeline.py \
+  --source google-sheets \
+  --google-spreadsheet-id <google-spreadsheet-id>
+```
+
+The first successful OAuth run creates:
+
+```text
+secrets/google_oauth/token.json
+```
+
+Treat `token.json` as a secret: it grants spreadsheet access as the authorized user. Never commit `credentials.json`, `token.json`, `.env`, or generated workbooks. These paths are intentionally ignored by Git.
+
+Troubleshooting Google Sheets mode:
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `GOOGLE_SPREADSHEET_ID_MISSING` | Spreadsheet ID was not configured | Set `B2B_GOOGLE_SPREADSHEET_ID` or pass `--google-spreadsheet-id`. |
+| `GOOGLE_CREDENTIALS_FILE_MISSING` | OAuth client JSON is absent | Save the Desktop OAuth client JSON to `secrets/google_oauth/credentials.json` or set `B2B_GOOGLE_CREDENTIALS_PATH`. |
+| `GOOGLE_OAUTH_TOKEN_ERROR` or HTTP 401 | Token expired, revoked, or scoped incorrectly | Delete `secrets/google_oauth/token.json` and rerun to authorize with readonly scope. |
+| HTTP 403 / `GOOGLE_SPREADSHEET_ACCESS_DENIED` | Authorized user lacks access | Share the spreadsheet with that Google account as a viewer. |
+| `MISSING_TARGET_SHEET` | Required tab title was not found | Verify the RK, CLICKTECK, and ETRADE tab names in the source spreadsheet. |
+| `DATE_COLUMN_MISSING` | Dispatch date header was not found | Verify the configured header row has `DATE` for RK or `Date` for CLICKTECK/ETRADE. |
+
 ### Pipeline 3: Sales & Inventory
 
 Pipeline 3 reads Amazon Vendor Central sales and inventory Excel exports, standardizes their columns, parses report metadata, validates gently, preserves source traceability, and writes backend-only audit artifacts for the future calculation engine.
@@ -187,6 +277,8 @@ Run the entire project end-to-end (all source pipelines, then the engine):
 
 ```bash
 python -m inventory_cover.cli run-full-inventory-cover
+python -m inventory_cover.cli run-full-inventory-cover --b2b-source google-sheets
+python -m inventory_cover.cli run-full-inventory-cover --b2b-source google-sheets --send-email --email-dry-run
 ```
 
 ## Automated Email Delivery
@@ -231,6 +323,11 @@ The email body is a short professional note that references the report period, s
 Example `.env` with placeholders only:
 
 ```text
+B2B_GOOGLE_SHEETS_ENABLED=false
+B2B_GOOGLE_SPREADSHEET_ID=<google-spreadsheet-id>
+B2B_GOOGLE_CREDENTIALS_PATH=secrets/google_oauth/credentials.json
+B2B_GOOGLE_TOKEN_PATH=secrets/google_oauth/token.json
+
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
 SMTP_USERNAME=<smtp-username>
@@ -348,6 +445,8 @@ Pipeline 2:
 ```bash
 python -m inventory_cover.cli run-b2b-dispatch --input-dir data/incoming/b2b_dispatch
 python scripts/run_b2b_dispatch_pipeline.py --input-dir data/incoming/b2b_dispatch
+python -m inventory_cover.cli run-b2b-dispatch --source google-sheets --b2b-as-of-date 2026-06-30 --b2b-lookback-days 2
+python scripts/run_b2b_dispatch_pipeline.py --source google-sheets
 ```
 
 Pipeline 3:
@@ -565,6 +664,12 @@ The `Mapping_Audit` sheet records the optional ASIN/SKU mapping workbook that wa
 The `Processing_Guide` sheet explains what the workbook is, which raw report was processed, where the raw input was copied, how headers were detected, how identifiers may be enriched from mapping, how dates and numbers were parsed, how rows and duplicates were handled, and how the future calculation engine will consume the artifact.
 
 ## Tests
+
+Install or refresh local dependencies after pulling dependency changes:
+
+```bash
+python -m pip install -e ".[dev]"
+```
 
 Run:
 

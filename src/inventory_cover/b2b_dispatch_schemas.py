@@ -13,6 +13,9 @@ class B2BTargetSheetSpec:
     expected_sheet_name: str
     source_channel: str
     aliases: tuple[str, ...]
+    google_sheet_name: str = ""
+    google_header_row: int = 0
+    google_dispatch_date_column: str = ""
 
 
 B2B_TARGET_SHEETS: tuple[B2BTargetSheetSpec, ...] = (
@@ -20,16 +23,25 @@ B2B_TARGET_SHEETS: tuple[B2BTargetSheetSpec, ...] = (
         expected_sheet_name="RK PO 007GK",
         source_channel="RK",
         aliases=("RK PO 007GK",),
+        google_sheet_name="RK PO 007GK",
+        google_header_row=3,
+        google_dispatch_date_column="DATE",
     ),
     B2BTargetSheetSpec(
         expected_sheet_name="CLICKTECK DISPATCH",
         source_channel="CLICKTECH",
         aliases=("CLICKTECK DISPATCH", "CLICKTECH DISPATCH"),
+        google_sheet_name="CLICKTECK DISPATCH ",
+        google_header_row=3,
+        google_dispatch_date_column="Date",
     ),
     B2BTargetSheetSpec(
         expected_sheet_name="ETRADE DISPATCH",
         source_channel="ETRADE",
         aliases=("ETRADE DISPATCH",),
+        google_sheet_name="ETRADE DISPATCH ",
+        google_header_row=4,
+        google_dispatch_date_column="Date",
     ),
 )
 

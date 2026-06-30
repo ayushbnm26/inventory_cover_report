@@ -18,9 +18,12 @@ from inventory_cover.b2b_dispatch_schemas import (
     RawB2BDispatchRow,
 )
 from inventory_cover.config import B2BDispatchPipelineConfig
-from inventory_cover.exceptions import CatastrophicPipelineError, FileValidationError
-from inventory_cover.io.b2b_dispatch_excel_io import read_b2b_dispatch_workbook
-from inventory_cover.io.b2b_dispatch_file_discovery import discover_b2b_dispatch_files
+from inventory_cover.exceptions import CatastrophicPipelineError
+from inventory_cover.io.b2b_dispatch_source_provider import (
+    B2BSourceAcquisitionFailure,
+    acquire_b2b_dispatch_source,
+    normalize_b2b_source_mode,
+)
 from inventory_cover.logging_utils import setup_run_logger, write_json_file
 from inventory_cover.normalization.b2b_dispatch_normalizer import normalize_b2b_dispatch_row
 from inventory_cover.reports.b2b_dispatch_excel_writer import write_b2b_dispatch_report
@@ -49,8 +52,9 @@ class B2BDispatchPipeline:
         )
         start_time = datetime.now()
         as_of_date = self.config.as_of_date or date.today()
-        lookback_start = as_of_date - timedelta(days=self.config.lookback_days - 1)
+        lookback_start = as_of_date - timedelta(days=self.config.lookback_days)
         lookback_end = as_of_date
+        source_mode = normalize_b2b_source_mode(self.config.source_mode)
 
         output_file = paths["outputs_b2b"] / f"B2B_Dispatch_Backend_Audit_{run_id}.xlsx"
         latest_file = self.config.processed_dir / "latest" / "B2B_Dispatch_Backend_Audit_latest.xlsx"
@@ -63,6 +67,7 @@ class B2BDispatchPipeline:
             "start_time": start_time.isoformat(),
             "input_directory": str(self.config.input_dir),
             "run_directory": str(run_dir),
+            "b2b_source_mode": source_mode,
             "as_of_date": as_of_date.isoformat(),
             "lookback_days": self.config.lookback_days,
             "lookback_start_date": lookback_start.isoformat(),
@@ -78,11 +83,15 @@ class B2BDispatchPipeline:
         validation_issues: list[B2BValidationIssue] = []
         duplicate_records: list[B2BDuplicateRecord] = []
         failed_files: set[str] = set()
+        source_count = 0
+        source_label = str(self.config.input_dir)
+        source_identifiers: list[str] = []
 
         logger.info("B2B Dispatch pipeline started. run_id=%s", run_id)
         logger.info(
-            "Config: input_dir=%s run_root=%s processed_dir=%s as_of_date=%s lookback_days=%s "
+            "Config: source_mode=%s input_dir=%s run_root=%s processed_dir=%s as_of_date=%s lookback_days=%s "
             "allow_multiple_files=%s allow_missing_target_sheets=%s dedupe_exact_rows=%s",
+            source_mode,
             self.config.input_dir,
             self.config.run_root,
             self.config.processed_dir,
@@ -94,46 +103,31 @@ class B2BDispatchPipeline:
         )
 
         try:
-            discovered_files = discover_b2b_dispatch_files(self.config)
-            logger.info("Files discovered: %s", len(discovered_files))
-            _copy_inputs(discovered_files, paths["inputs_b2b"])
-
-            for source_path in discovered_files:
-                try:
-                    read_result = read_b2b_dispatch_workbook(source_path, self.config, run_id)
-                    raw_rows.extend(read_result.rows)
-                    sheet_audit.extend(read_result.sheet_audit)
-                    found_count = sum(1 for record in read_result.sheet_audit if record.sheet_found)
-                    missing_count = sum(1 for record in read_result.sheet_audit if not record.sheet_found)
-                    logger.info(
-                        "Workbook scanned: %s target_sheets_found=%s target_sheets_missing=%s raw_rows=%s",
-                        source_path.name,
-                        found_count,
-                        missing_count,
-                        len(read_result.rows),
-                    )
-                    for record in read_result.sheet_audit:
-                        if record.header_row_found:
-                            logger.info(
-                                "Header row detected: file=%s sheet=%s channel=%s row=%s",
-                                record.source_file,
-                                record.actual_sheet_name,
-                                record.source_channel,
-                                record.header_row_found,
-                            )
-                except FileValidationError as exc:
-                    failed_files.add(source_path.name)
-                    validation_issues.append(
-                        B2BValidationIssue(
-                            run_id=run_id,
-                            severity="ERROR",
-                            issue_type="FILE_OPEN_FAILED",
-                            source_file=source_path.name,
-                            issue_detail=str(exc),
-                            action_taken="File skipped; run continued with other discovered files.",
-                        )
-                    )
-                    logger.error("Skipped unreadable workbook %s: %s", source_path.name, exc)
+            source_result = acquire_b2b_dispatch_source(self.config, run_id, paths["inputs_b2b"], logger)
+            discovered_files = source_result.discovered_files
+            raw_rows.extend(source_result.rows)
+            sheet_audit.extend(source_result.sheet_audit)
+            validation_issues.extend(source_result.validation_issues)
+            failed_files = set(source_result.failed_files)
+            source_count = source_result.source_count
+            source_label = source_result.source_label
+            source_identifiers = source_result.source_identifiers
+            metadata.update(source_result.metadata)
+            metadata.update(
+                {
+                    "b2b_source_mode": source_result.source_mode,
+                    "source_label": source_label,
+                    "source_count": source_count,
+                    "source_identifiers": source_identifiers,
+                    "date_window_used": {
+                        "as_of_date": as_of_date.isoformat(),
+                        "lookback_days": self.config.lookback_days,
+                        "lookback_start": lookback_start.isoformat(),
+                        "lookback_end": lookback_end.isoformat(),
+                        "inclusive": True,
+                    },
+                }
+            )
 
             _apply_sheet_validation_policy(
                 run_id=run_id,
@@ -188,6 +182,17 @@ class B2BDispatchPipeline:
                 _annotate_dedupe_drops(sheet_audit, rows, rows_to_write)
             else:
                 rows_to_write = []
+                validation_issues.append(
+                    B2BValidationIssue(
+                        run_id=run_id,
+                        severity="WARNING",
+                        issue_type="NO_ROWS_INCLUDED_IN_WINDOW",
+                        field_name="Dispatch Date",
+                        raw_value=f"{lookback_start.isoformat()} through {lookback_end.isoformat()}",
+                        issue_detail="No valid dispatch rows were included for the configured inclusive lookback window.",
+                        action_taken="Empty latest backend workbook written so downstream transit is zero.",
+                    )
+                )
                 logger.warning(
                     "No dispatch rows were included for %s through %s; writing an empty latest backend "
                     "so downstream transit is zero for this run.",
@@ -198,7 +203,8 @@ class B2BDispatchPipeline:
             summary = _build_run_summary(
                 run_id=run_id,
                 start_time=start_time,
-                input_folder=self.config.input_dir,
+                source_label=source_label,
+                source_count=source_count,
                 output_folder=paths["outputs_b2b"],
                 as_of_date=as_of_date,
                 lookback_days=self.config.lookback_days,
@@ -245,6 +251,8 @@ class B2BDispatchPipeline:
                     "end_time": end_time.isoformat(),
                     "duration_seconds": round((end_time - start_time).total_seconds(), 3),
                     "files_discovered": [str(path) for path in discovered_files],
+                    "source_identifiers": source_identifiers,
+                    "source_count": source_count,
                     "files_processed_successfully": summary["Files processed successfully"],
                     "files_skipped_or_failed": summary["Files skipped/failed"],
                     "target_sheets_expected": summary["Target sheets expected"],
@@ -258,6 +266,13 @@ class B2BDispatchPipeline:
                         "Rows rejected due to invalid critical fields"
                     ],
                     "rows_written": len(rows_to_write),
+                    "row_counts": {
+                        "fetched": _metadata_rows_fetched(metadata, sheet_audit),
+                        "scanned": sum(record.rows_scanned for record in sheet_audit),
+                        "included": summary["Rows included in lookback window"],
+                        "excluded": summary["Rows excluded outside date window"],
+                        "rejected": summary["Rows rejected due to invalid critical fields"],
+                    },
                     "warning_count": _count_warnings(validation_issues),
                     "error_count": _count_errors(validation_issues),
                     "duplicate_count": len(duplicate_records),
@@ -292,6 +307,23 @@ class B2BDispatchPipeline:
                 validation_issue_count=len(validation_issues),
                 duplicate_count=len(duplicate_records),
             )
+        except B2BSourceAcquisitionFailure as exc:
+            validation_issues.extend(exc.validation_issues)
+            metadata.update(exc.metadata)
+            logger.error("B2B Dispatch source acquisition failed: %s", exc)
+            _write_failure_artifacts(
+                metadata=metadata,
+                metadata_file=metadata_file,
+                validation_file=validation_file,
+                duplicates_file=duplicates_file,
+                validation_issues=validation_issues,
+                duplicate_records=duplicate_records,
+                sheet_audit=sheet_audit,
+                discovered_files=discovered_files,
+                start_time=start_time,
+                error=str(exc),
+            )
+            raise CatastrophicPipelineError(str(exc)) from exc
         except CatastrophicPipelineError as exc:
             logger.error("B2B Dispatch pipeline failed: %s", exc)
             _write_failure_artifacts(
@@ -354,7 +386,12 @@ def _apply_sheet_validation_policy(
         )
 
     for record in failed_records:
-        issue_type = "CRITICAL_HEADERS_MISSING" if "Critical headers missing" in record.notes else "HEADER_ROW_NOT_FOUND"
+        if "Date column missing" in record.notes:
+            issue_type = "DATE_COLUMN_MISSING"
+        elif "Critical headers missing" in record.notes:
+            issue_type = "CRITICAL_HEADERS_MISSING"
+        else:
+            issue_type = "HEADER_ROW_NOT_FOUND"
         validation_issues.append(
             B2BValidationIssue(
                 run_id=run_id,
@@ -432,7 +469,8 @@ def _annotate_dedupe_drops(
 def _build_run_summary(
     run_id: str,
     start_time: datetime,
-    input_folder: Path,
+    source_label: str,
+    source_count: int,
     output_folder: Path,
     as_of_date: date,
     lookback_days: int,
@@ -448,19 +486,20 @@ def _build_run_summary(
     latest_file: Path,
     log_file: Path,
 ) -> dict[str, Any]:
+    active_source_count = source_count if source_count else len(discovered_files)
     return {
         "Run ID": run_id,
         "Run timestamp": start_time.isoformat(timespec="seconds"),
-        "Input folder": str(input_folder),
+        "Input folder": source_label,
         "Output folder": str(output_folder),
         "As of date": as_of_date,
         "Lookback days": lookback_days,
         "Lookback start date": lookback_start,
         "Lookback end date": lookback_end,
-        "Files discovered": len(discovered_files),
-        "Files processed successfully": len(discovered_files) - len(failed_files),
+        "Files discovered": active_source_count,
+        "Files processed successfully": active_source_count - len(failed_files),
         "Files skipped/failed": len(failed_files),
-        "Target sheets expected": len(B2B_TARGET_SHEETS) * len(discovered_files),
+        "Target sheets expected": len(B2B_TARGET_SHEETS) * active_source_count,
         "Target sheets found": sum(1 for record in sheet_audit if record.sheet_found),
         "Target sheets missing": sum(1 for record in sheet_audit if not record.sheet_found),
         "Total source rows scanned": sum(record.rows_scanned for record in sheet_audit),
@@ -584,3 +623,10 @@ def _count_warnings(issues: list[B2BValidationIssue]) -> int:
 
 def _count_errors(issues: list[B2BValidationIssue]) -> int:
     return sum(1 for issue in issues if issue.severity.upper() == "ERROR")
+
+
+def _metadata_rows_fetched(metadata: dict[str, Any], sheet_audit: list[B2BSheetAuditRecord]) -> int:
+    fetched_by_sheet = metadata.get("google_rows_fetched_by_sheet")
+    if isinstance(fetched_by_sheet, dict):
+        return sum(int(value or 0) for value in fetched_by_sheet.values())
+    return sum(record.rows_scanned for record in sheet_audit)

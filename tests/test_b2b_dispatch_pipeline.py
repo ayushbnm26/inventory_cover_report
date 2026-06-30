@@ -143,7 +143,7 @@ def test_non_target_sheets_are_ignored(tmp_path: Path) -> None:
     assert records[0]["Source Sheet"] == RK_SHEET
 
 
-def test_date_filtering_keeps_today_and_yesterday_only(tmp_path: Path) -> None:
+def test_date_filtering_keeps_past_two_days_plus_today(tmp_path: Path) -> None:
     input_dir = tmp_path / "incoming"
     input_dir.mkdir()
     _write_dispatch_workbook(
@@ -152,7 +152,8 @@ def test_date_filtering_keeps_today_and_yesterday_only(tmp_path: Path) -> None:
             RK_SHEET: [
                 _row(po="PO-TODAY", dispatch_date="26-06-2026"),
                 _row(po="PO-YESTERDAY", dispatch_date="25/06/2026"),
-                _row(po="PO-OLD", dispatch_date="24-06-2026"),
+                _row(po="PO-LOOKBACK-START", dispatch_date="24-06-2026"),
+                _row(po="PO-OLD", dispatch_date="23-06-2026"),
             ]
         },
         include_sheets=(RK_SHEET,),
@@ -162,7 +163,7 @@ def test_date_filtering_keeps_today_and_yesterday_only(tmp_path: Path) -> None:
     records = _master_records(result.backend_output_file)
     issue_types = _issue_types(result.backend_output_file)
 
-    assert {record["PO"] for record in records} == {"PO-TODAY", "PO-YESTERDAY"}
+    assert {record["PO"] for record in records} == {"PO-TODAY", "PO-YESTERDAY", "PO-LOOKBACK-START"}
     assert "OUTSIDE_LOOKBACK_WINDOW" in issue_types
 
 
@@ -173,8 +174,8 @@ def test_zero_rows_in_lookback_writes_empty_latest_backend(tmp_path: Path) -> No
         input_dir / "B2B DISPATCH TRACKER.xlsx",
         rows_by_sheet={
             RK_SHEET: [
-                _row(po="PO-OLD", dispatch_date="24-06-2026"),
-                _row(po="PO-OLDER", dispatch_date="23-06-2026"),
+                _row(po="PO-OLD", dispatch_date="23-06-2026"),
+                _row(po="PO-OLDER", dispatch_date="22-06-2026"),
             ]
         },
         include_sheets=(RK_SHEET,),
